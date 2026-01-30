@@ -1,0 +1,456 @@
+# ===============================================
+# COMPLETE CHILI HEALTH CLASSIFIER
+# Upload to Google Colab and Run All Cells
+# ===============================================
+
+# STEP 1: Install and Import Libraries
+# ===============================================
+import tensorflow as tf
+from tensorflow import keras
+from tensorflow.keras import layers
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+import numpy as np
+import matplotlib.pyplot as plt
+from google.colab import files, drive
+from PIL import Image
+import io
+import os
+import shutil
+import zipfile
+
+print("✓ Libraries imported successfully!")
+
+# STEP 2: Mount Google Drive (Optional - for saving model)
+# ===============================================
+print("\n=== Mounting Google Drive ===")
+try:
+    drive.mount('/content/drive')
+    print("✓ Drive mounted!")
+except:
+    print("⚠️ Drive mount skipped")
+
+# STEP 3: Upload and Extract Dataset
+# ===============================================
+print("\n=== Dataset Upload ===")
+print("Please upload your ZIP file containing:")
+print("  - train/healthy/ (images)")
+print("  - train/unhealthy/ (images)")
+print("\nUploading...")
+
+uploaded = files.upload()
+
+# Extract ZIP file
+for filename in uploaded.keys():
+    if filename.endswith('.zip'):
+        print(f"\nExtracting {filename}...")
+        with zipfile.ZipFile(filename, 'r') as zip_ref:
+            zip_ref.extractall('.')
+        print("✓ Extraction complete!")
+
+# STEP 4: Fix Folder Structure
+# ===============================================
+print("\n=== Fixing Folder Structure ===")
+
+# Check for 'train' folder and rename to 'chili_dataset'
+if os.path.exists('train'):
+    print("Found 'train' folder...")
+    if os.path.exists('chili_dataset'):
+        shutil.rmtree('chili_dataset')
+    shutil.move('train', 'chili_dataset')
+    print("✓ Renamed to 'chili_dataset'")
+elif os.path.exists('chili_dataset'):
+    print("✓ 'chili_dataset' folder found")
+else:
+    # Check for other possible structures
+    print("Checking extracted files...")
+    for item in os.listdir('.'):
+        if os.path.isdir(item) and item not in ['sample_data', 'drive', '.config']:
+            print(f"Found folder: {item}")
+            # Check if it has healthy/unhealthy subfolders
+            if os.path.exists(f'{item}/healthy') and os.path.exists(f'{item}/unhealthy'):
+                shutil.move(item, 'chili_dataset')
+                print(f"✓ Renamed '{item}' to 'chili_dataset'")
+                break
+
+# Verify dataset
+print("\n=== Dataset Verification ===")
+if os.path.exists('chili_dataset/healthy') and os.path.exists('chili_dataset/unhealthy'):
+    healthy_imgs = [f for f in os.listdir('chili_dataset/healthy')
+                    if f.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp'))]
+    unhealthy_imgs = [f for f in os.listdir('chili_dataset/unhealthy')
+                      if f.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp'))]
+
+    print(f"✓ Healthy images: {len(healthy_imgs)}")
+    print(f"✓ Unhealthy images: {len(unhealthy_imgs)}")
+    print(f"✓ Total images: {len(healthy_imgs) + len(unhealthy_imgs)}")
+
+    if len(healthy_imgs) == 0 or len(unhealthy_imgs) == 0:
+        print("\n❌ ERROR: No images found in folders!")
+        print("Please check your ZIP structure.")
+        raise Exception("No images found")
+else:
+    print("❌ ERROR: Required folders not found!")
+    print("Current directory structure:")
+    os.system('ls -R')
+    raise Exception("Folder structure incorrect")
+
+# STEP 5: Data Preparation
+# ===============================================
+print("\n=== Preparing Data ===")
+
+IMG_SIZE = 224
+BATCH_SIZE = 16  # Reduced for better training with small dataset
+
+# Data augmentation
+train_datagen = ImageDataGenerator(
+    rescale=1./255,
+    rotation_range=30,
+    width_shift_range=0.3,
+    height_shift_range=0.3,
+    shear_range=0.2,
+    zoom_range=0.3,
+    horizontal_flip=True,
+    vertical_flip=True,
+    fill_mode='nearest',
+    validation_split=0.2  # 80% train, 20% validation
+)
+
+# Load training data
+train_generator = train_datagen.flow_from_directory(
+    'chili_dataset/',
+    target_size=(IMG_SIZE, IMG_SIZE),
+    batch_size=BATCH_SIZE,
+    class_mode='binary',
+    subset='training'
+)
+
+# Load validation data
+validation_generator = train_datagen.flow_from_directory(
+    'chili_dataset/',
+    target_size=(IMG_SIZE, IMG_SIZE),
+    batch_size=BATCH_SIZE,
+    class_mode='binary',
+    subset='validation'
+)
+
+print(f"✓ Training samples: {train_generator.samples}")
+print(f"✓ Validation samples: {validation_generator.samples}")
+print(f"✓ Class indices: {train_generator.class_indices}")
+
+# STEP 6: Build CNN Model
+# ===============================================
+print("\n=== Building Model ===")
+
+model = keras.Sequential([
+    # Block 1
+    layers.Conv2D(32, (3, 3), activation='relu', input_shape=(IMG_SIZE, IMG_SIZE, 3)),
+    layers.BatchNormalization(),
+    layers.MaxPooling2D(2, 2),
+
+    # Block 2
+    layers.Conv2D(64, (3, 3), activation='relu'),
+    layers.BatchNormalization(),
+    layers.MaxPooling2D(2, 2),
+
+    # Block 3
+    layers.Conv2D(128, (3, 3), activation='relu'),
+    layers.BatchNormalization(),
+    layers.MaxPooling2D(2, 2),
+
+    # Block 4
+    layers.Conv2D(256, (3, 3), activation='relu'),
+    layers.BatchNormalization(),
+    layers.MaxPooling2D(2, 2),
+
+    # Dense layers
+    layers.Flatten(),
+    layers.Dropout(0.5),
+    layers.Dense(512, activation='relu'),
+    layers.Dropout(0.3),
+    layers.Dense(1, activation='sigmoid')
+])
+
+# Compile model
+model.compile(
+    optimizer=keras.optimizers.Adam(learning_rate=0.0001),
+    loss='binary_crossentropy',
+    metrics=['accuracy']
+)
+
+print("\n✓ Model built successfully!")
+model.summary()
+
+# STEP 7: Train Model
+# ===============================================
+print("\n=== Training Model ===")
+print("This will take some time...")
+
+# Callbacks
+early_stop = keras.callbacks.EarlyStopping(
+    monitor='val_loss',
+    patience=5,
+    restore_best_weights=True
+)
+
+reduce_lr = keras.callbacks.ReduceLROnPlateau(
+    monitor='val_loss',
+    factor=0.5,
+    patience=3,
+    min_lr=0.00001
+)
+
+history = model.fit(
+    train_generator,
+    epochs=30,
+    validation_data=validation_generator,
+    callbacks=[early_stop, reduce_lr]
+)
+
+print("\n✓ Training completed!")
+
+# STEP 8: Visualize Training Results
+# ===============================================
+print("\n=== Training Results ===")
+
+plt.figure(figsize=(14, 5))
+
+# Accuracy plot
+plt.subplot(1, 2, 1)
+plt.plot(history.history['accuracy'], label='Training Accuracy', linewidth=2)
+plt.plot(history.history['val_accuracy'], label='Validation Accuracy', linewidth=2)
+plt.title('Model Accuracy', fontsize=14, fontweight='bold')
+plt.xlabel('Epoch')
+plt.ylabel('Accuracy')
+plt.legend()
+plt.grid(True, alpha=0.3)
+
+# Loss plot
+plt.subplot(1, 2, 2)
+plt.plot(history.history['loss'], label='Training Loss', linewidth=2)
+plt.plot(history.history['val_loss'], label='Validation Loss', linewidth=2)
+plt.title('Model Loss', fontsize=14, fontweight='bold')
+plt.xlabel('Epoch')
+plt.ylabel('Loss')
+plt.legend()
+plt.grid(True, alpha=0.3)
+
+plt.tight_layout()
+plt.show()
+
+# Print final accuracy
+final_train_acc = history.history['accuracy'][-1] * 100
+final_val_acc = history.history['val_accuracy'][-1] * 100
+print(f"\nFinal Training Accuracy: {final_train_acc:.2f}%")
+print(f"Final Validation Accuracy: {final_val_acc:.2f}%")
+
+# DIAGNOSTIC: Check if model is predicting properly
+print("\n=== Model Diagnostic ===")
+print("Testing on training data samples...")
+
+# Test on a few samples from each class
+sample_healthy = os.listdir('chili_dataset/healthy')[0]
+sample_unhealthy = os.listdir('chili_dataset/unhealthy')[0]
+
+test_img_h = keras.preprocessing.image.load_img(
+    f'chili_dataset/healthy/{sample_healthy}',
+    target_size=(IMG_SIZE, IMG_SIZE)
+)
+test_img_u = keras.preprocessing.image.load_img(
+    f'chili_dataset/unhealthy/{sample_unhealthy}',
+    target_size=(IMG_SIZE, IMG_SIZE)
+)
+
+test_arr_h = keras.preprocessing.image.img_to_array(test_img_h)
+test_arr_h = np.expand_dims(test_arr_h, axis=0) / 255.0
+
+test_arr_u = keras.preprocessing.image.img_to_array(test_img_u)
+test_arr_u = np.expand_dims(test_arr_u, axis=0) / 255.0
+
+pred_h = model.predict(test_arr_h, verbose=0)[0][0]
+pred_u = model.predict(test_arr_u, verbose=0)[0][0]
+
+print(f"\nHealthy sample prediction: {pred_h:.4f}")
+print(f"Unhealthy sample prediction: {pred_u:.4f}")
+print(f"Class indices: {train_generator.class_indices}")
+
+if abs(pred_h - pred_u) < 0.1:
+    print("\n⚠️ WARNING: Model predictions are too similar!")
+    print("Model might not be learning properly.")
+    print("Check if images are actually different.")
+
+# STEP 9: Save Model
+# ===============================================
+print("\n=== Saving Model ===")
+
+# Save locally
+model.save('chili_classifier_model.h5')
+print("✓ Model saved as 'chili_classifier_model.h5'")
+
+# Save to Google Drive (if mounted)
+try:
+    model.save('/content/drive/MyDrive/chili_classifier_model.h5')
+    print("✓ Model also saved to Google Drive!")
+except:
+    print("⚠️ Could not save to Drive")
+
+# STEP 10: Prediction Function
+# ===============================================
+print("\n=== Setting up Prediction ===")
+
+def predict_chili_health(image_path):
+    """
+    Predict if chili is healthy or unhealthy
+    Returns: class name and confidence percentage
+    """
+    # Load and preprocess image
+    img = keras.preprocessing.image.load_img(
+        image_path,
+        target_size=(IMG_SIZE, IMG_SIZE)
+    )
+    img_array = keras.preprocessing.image.img_to_array(img)
+    img_array = np.expand_dims(img_array, axis=0)
+    img_array = img_array / 255.0
+
+    # Make prediction
+    prediction = model.predict(img_array, verbose=0)[0][0]
+
+    # Debug: Print raw prediction
+    print(f"Raw prediction value: {prediction:.6f}")
+
+    # Get class names from generator
+    class_indices = train_generator.class_indices
+    print(f"Class mapping: {class_indices}")
+
+    # Determine class based on threshold
+    # Standard: 0 = first class, 1 = second class
+    threshold = 0.5
+
+    if prediction >= threshold:
+        predicted_class_idx = 1
+    else:
+        predicted_class_idx = 0
+
+    # Find which class corresponds to the index
+    class_names = {v: k for k, v in class_indices.items()}
+    class_name = class_names[predicted_class_idx]
+
+    # Calculate confidence
+    if predicted_class_idx == 1:
+        confidence = prediction * 100
+    else:
+        confidence = (1 - prediction) * 100
+
+    # Display image with prediction
+    plt.figure(figsize=(8, 6))
+    plt.imshow(img)
+    plt.axis('off')
+
+    # Color based on prediction
+    color = 'green' if 'health' in class_name.lower() else 'red'
+    plt.title(f'{class_name.upper()} - Confidence: {confidence:.2f}%',
+              fontsize=16, fontweight='bold', color=color)
+    plt.show()
+
+    print(f"Predicted class index: {predicted_class_idx}")
+    print(f"Predicted class name: {class_name}")
+
+    return class_name, confidence
+
+print("✓ Prediction function ready!")
+
+# STEP 11: Test with New Image
+# ===============================================
+print("\n" + "="*50)
+print("TESTING WITH NEW IMAGE")
+print("="*50)
+print("\nUpload a chili image to test the model:")
+
+test_uploaded = files.upload()
+
+for filename in test_uploaded.keys():
+    # Save uploaded file
+    with open(filename, 'wb') as f:
+        f.write(test_uploaded[filename])
+
+    print(f"\n{'='*50}")
+    print(f"Testing: {filename}")
+    print("="*50)
+
+    # Make prediction
+    result, conf = predict_chili_health(filename)
+
+    print(f"\n{'='*50}")
+    print(f"RESULT: {result}")
+    print(f"CONFIDENCE: {conf:.2f}%")
+    print("="*50)
+
+    # Show emoji based on result
+    if result == "Healthy":
+        print("✅ This chili looks HEALTHY! 🌶️")
+    else:
+        print("⚠️ This chili appears UNHEALTHY! 🍂")
+
+# STEP 12: Continuous Testing Loop
+# ===============================================
+print("\n\n" + "="*50)
+print("CONTINUOUS TESTING MODE")
+print("="*50)
+
+def test_multiple_images():
+    """Test multiple images one by one"""
+    while True:
+        print("\n" + "="*50)
+        print("Upload a NEW chili image to test")
+        print("(Press 'Cancel' to stop testing)")
+        print("="*50)
+
+        try:
+            test_uploaded = files.upload()
+
+            if not test_uploaded:
+                print("\n❌ No file uploaded. Stopping...")
+                break
+
+            for filename in test_uploaded.keys():
+                # Save uploaded file
+                with open(filename, 'wb') as f:
+                    f.write(test_uploaded[filename])
+
+                print(f"\n{'='*50}")
+                print(f"Testing: {filename}")
+                print("="*50)
+
+                # Make prediction
+                result, conf = predict_chili_health(filename)
+
+                print(f"\n{'='*50}")
+                print(f"RESULT: {result}")
+                print(f"CONFIDENCE: {conf:.2f}%")
+                print("="*50)
+
+                # Show emoji based on result
+                if result == "Healthy":
+                    print("✅ This chili looks HEALTHY! 🌶️")
+                else:
+                    print("⚠️ This chili appears UNHEALTHY! 🍂")
+
+        except Exception as e:
+            print(f"\n⚠️ Error or cancelled: {e}")
+            break
+
+        # Ask if user wants to continue
+        print("\n" + "-"*50)
+        user_input = input("Want to test another image? (yes/no): ").lower()
+        if user_input not in ['yes', 'y', 'han', 'ha']:
+            print("\n✅ Testing completed!")
+            break
+
+# Start continuous testing
+print("\n✅ MODEL READY!")
+print("Starting continuous testing mode...\n")
+test_multiple_images()
+
+print("\n" + "="*50)
+print("To test more images anytime, run:")
+print("test_multiple_images()")
+print("="*50)
